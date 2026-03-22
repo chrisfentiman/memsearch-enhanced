@@ -1,6 +1,28 @@
 {
-  "description": "Enhanced memory hooks — durable knowledge extraction, subagent support",
+  "description": "Enhanced memory hooks — durable knowledge extraction, subagent support, full lifecycle",
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/user-prompt-submit.sh",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
@@ -21,6 +43,17 @@
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/stop.sh",
             "async": true,
             "timeout": 120
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/session-end.sh",
+            "timeout": 10
           }
         ]
       }

@@ -46,17 +46,11 @@ fi
 
 ensure_memory_dir
 
-# Parse transcript — reuse memsearch's parser if available
+# Parse transcript — use our bundled parser
 PARSED=""
-PARSER="$SCRIPT_DIR/../../memsearch-plugins/hooks/parse-transcript.sh"
+PARSER="$SCRIPT_DIR/parse-transcript.sh"
 if [ -f "$PARSER" ]; then
   PARSED=$("$PARSER" "$TRANSCRIPT_PATH" 2>/dev/null || true)
-else
-  # Fallback: use memsearch's cached parser
-  PARSER_CACHED=$(find "$HOME/.claude/plugins/cache" -name "parse-transcript.sh" -path "*/memsearch*" 2>/dev/null | head -1)
-  if [ -n "$PARSER_CACHED" ]; then
-    PARSED=$("$PARSER_CACHED" "$TRANSCRIPT_PATH" 2>/dev/null || true)
-  fi
 fi
 
 if [ -z "$PARSED" ] || [ "$PARSED" = "(empty transcript)" ] || [ "$PARSED" = "(no user message found)" ] || [ "$PARSED" = "(empty turn)" ]; then
@@ -89,6 +83,7 @@ print(uuid)
 " "$TRANSCRIPT_PATH" 2>/dev/null || true)
 
 # Summarize using our custom prompt focused on durable knowledge
+PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROMPT_FILE="$PLUGIN_ROOT/prompts/stop.txt"
 SUMMARY=""
 if command -v claude &>/dev/null && [ -f "$PROMPT_FILE" ]; then
