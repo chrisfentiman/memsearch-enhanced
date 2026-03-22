@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.14](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.13...v0.1.14) (2026-03-22)
+
+
+### Bug Fixes
+
+* skip transcript summarization prompts in classifier ([#19](https://github.com/chrisfentiman/memsearch-enhanced/issues/19)) ([bb6562a](https://github.com/chrisfentiman/memsearch-enhanced/commit/bb6562a9c8360a56363452dd24ff2d99de234655))
+
 ## [0.1.13](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.12...v0.1.13) (2026-03-22)
 
 
