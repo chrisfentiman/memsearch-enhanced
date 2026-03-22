@@ -15,8 +15,8 @@ if [ -z "$PROMPT" ] || [ ${#PROMPT} -lt 10 ]; then
   exit 0
 fi
 
-# Skip system/XML messages (task notifications, hook output, etc.)
-if [[ "$PROMPT" == "<"* ]] || [[ "$PROMPT" == "{"* ]]; then
+# Skip non-user prompts: system/XML, slash commands, transcript summarization
+if [[ "$PROMPT" == "<"* ]] || [[ "$PROMPT" == "{"* ]] || [[ "$PROMPT" == "/"* ]] || [[ "$PROMPT" == *"===BEGIN_TRANSCRIPT==="* ]]; then
   echo '{"systemMessage": "[memsearch] Memory available"}'
   exit 0
 fi
