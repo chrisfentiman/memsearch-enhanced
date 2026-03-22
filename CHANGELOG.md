@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.11](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.10...v0.1.11) (2026-03-22)
+
+
+### Bug Fixes
+
+* improve category inference in self-improvement loop ([#13](https://github.com/chrisfentiman/memsearch-enhanced/issues/13)) ([0981ece](https://github.com/chrisfentiman/memsearch-enhanced/commit/0981ecef407aa24c28f24a79018818e28fc9fd1c))
+
 ## [0.1.10](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.9...v0.1.10) (2026-03-22)
 
 
