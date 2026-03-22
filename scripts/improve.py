@@ -5,17 +5,15 @@
 """
 Self-improvement for the semantic classifier.
 
-Analyzes session transcripts to find misclassifications:
-- Prompts classified as "no context needed" but followed by file lookups,
-  memsearch searches, or agent spawns (should have been "needs context")
-- Prompts classified as "needs context" but followed only by simple responses
-  (probably didn't need context)
-
-Updates the project-level exemplars.toml with corrections.
+1. Analyzes session transcripts to find candidate exemplars from tool usage
+2. Validates candidates against the bootstrap classifier (quality gate)
+3. Merges with existing exemplars, scores all against bootstrap
+4. Keeps only top-N highest quality exemplars per category
+5. Splits into global (generic patterns) vs project (codebase-specific)
 
 Usage:
   uv run improve.py <transcript.jsonl>
-  uv run improve.py --auto   # find latest transcript automatically
+  uv run improve.py --auto
 """
 
 from __future__ import annotations
@@ -24,6 +22,8 @@ import json
 import os
 import sys
 from pathlib import Path
+
+import numpy as np
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -34,9 +34,14 @@ else:
         import tomli as tomllib
 
 try:
-    import tomli_w
+    from fastembed import TextEmbedding
 except ImportError:
-    tomli_w = None
+    print("fastembed not installed", file=sys.stderr)
+    sys.exit(1)
+
+SCRIPT_DIR = Path(__file__).parent
+MAX_EXEMPLARS_PER_CATEGORY = 30
+QUALITY_THRESHOLD = 0.35  # minimum similarity to bootstrap to be accepted
 
 # Tools that indicate the prompt needed project context
 CONTEXT_TOOLS = {
@@ -49,14 +54,47 @@ CONTEXT_TOOLS = {
     "Skill",
 }
 
-# Tools that indicate routine/simple work (no context needed)
-SIMPLE_TOOLS = {
-    "Bash",  # could go either way, but alone it's usually simple
-}
+SIMPLE_TOOLS = {"Bash"}
+
+
+# --- Bootstrap exemplars (quality gate) ---
+
+
+def load_bootstrap() -> tuple[list[str], list[str]]:
+    """Load the plugin's bootstrap exemplars (never modified by self-improvement)."""
+    bootstrap_path = SCRIPT_DIR / "exemplars.toml"
+    if not bootstrap_path.exists():
+        return (
+            ["fix the bug", "what did we decide", "refactor the module"],
+            ["hello", "thanks", "what is REST"],
+        )
+    with open(bootstrap_path, "rb") as f:
+        data = tomllib.load(f)
+    return (
+        data.get("needs_context", {}).get("examples", []),
+        data.get("no_context", {}).get("examples", []),
+    )
+
+
+def load_existing_exemplars(path: Path) -> tuple[list[str], list[str]]:
+    """Load existing exemplars from a TOML file."""
+    if not path.exists():
+        return [], []
+    try:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+        return (
+            data.get("needs_context", {}).get("examples", []),
+            data.get("no_context", {}).get("examples", []),
+        )
+    except Exception:
+        return [], []
+
+
+# --- Transcript analysis ---
 
 
 def parse_transcript(path: Path) -> list[dict]:
-    """Parse a JSONL transcript into a list of messages."""
     messages = []
     with open(path) as f:
         for line in f:
@@ -65,6 +103,38 @@ def parse_transcript(path: Path) -> list[dict]:
             except json.JSONDecodeError:
                 continue
     return messages
+
+
+def _clean_prompt(text: str) -> str | None:
+    """Clean a prompt for use as an exemplar. Returns None if unsuitable."""
+    text = text.strip()
+
+    # Too short or too long
+    if len(text) < 15 or len(text) > 150:
+        return None
+
+    # Contains transcript/markdown/XML artifacts
+    if any(marker in text for marker in [
+        "<!--", "```", "###", "===", "<system-reminder>",
+        "<channel", "<command", "<task-notification", "<local-command",
+    ]):
+        return None
+
+    # Contains file paths (too specific)
+    if "/Users/" in text or "/.claude/" in text or "/opt/" in text:
+        return None
+
+    # All caps / angry (not a good exemplar)
+    if text.isupper():
+        return None
+
+    # Take first sentence only if multi-sentence
+    for sep in [". ", "? ", "! ", "\n"]:
+        if sep in text:
+            text = text[:text.index(sep) + 1]
+            break
+
+    return text.strip()[:120]
 
 
 def extract_turns(messages: list[dict]) -> list[dict]:
@@ -77,82 +147,26 @@ def extract_turns(messages: list[dict]) -> list[dict]:
         mtype = msg.get("type", "")
         content = msg.get("message", {}).get("content", "")
 
-        # User message with string content = a prompt
         if mtype == "user" and isinstance(content, str) and len(content.strip()) > 10:
-            # Save previous turn if exists
             if current_prompt is not None:
                 turns.append({"prompt": current_prompt, "tools": current_tools})
-            current_prompt = content.strip()
+            # Clean the prompt for exemplar use
+            cleaned = _clean_prompt(content)
+            current_prompt = cleaned  # None if unsuitable
             current_tools = set()
 
-        # Assistant tool_use = tools used in response
         if mtype == "assistant" and isinstance(content, list):
             for block in content:
                 if block.get("type") == "tool_use":
-                    tool_name = block.get("name", "")
-                    current_tools.add(tool_name)
+                    current_tools.add(block.get("name", ""))
 
-    # Don't forget the last turn
     if current_prompt is not None:
         turns.append({"prompt": current_prompt, "tools": current_tools})
 
     return turns
 
 
-def analyze_turns(turns: list[dict], decisions: dict[str, dict]) -> tuple[list[str], list[str]]:
-    """Compare classifier decisions against actual tool usage.
-
-    Returns:
-        new_needs_context: prompts that should be added to needs_context
-        new_no_context: prompts that should be added to no_context
-    """
-    new_needs = []
-    new_no = []
-
-    for turn in turns:
-        prompt = turn["prompt"][:200]
-        tools = turn["tools"]
-
-        # Check if we have a classifier decision for this prompt
-        decision = decisions.get(prompt)
-
-        # Determine ground truth: did this prompt actually need context?
-        used_context_tools = tools & CONTEXT_TOOLS
-        actually_needed = len(used_context_tools) > 0
-
-        if decision is None:
-            # No classifier decision (daemon wasn't running for this prompt)
-            # Skip - we can't evaluate without a baseline decision
-            continue
-
-        classified_as_needing = decision.get("needs_context", False)
-
-        # Misclassification: said "no" but actually needed context
-        if not classified_as_needing and actually_needed:
-            new_needs.append(prompt)
-            print(
-                f"  FALSE NEGATIVE: '{prompt[:80]}...' "
-                f"(tools: {', '.join(used_context_tools)})",
-                file=sys.stderr,
-            )
-
-        # Misclassification: said "yes" but only simple tools used
-        if classified_as_needing and not actually_needed and len(tools) > 0:
-            # Only flag if we're confident it was a false positive
-            # (has tools but none are context-related)
-            if tools and not (tools - SIMPLE_TOOLS - {""}):
-                new_no.append(prompt)
-                print(
-                    f"  FALSE POSITIVE: '{prompt[:80]}...' "
-                    f"(tools: {', '.join(tools)})",
-                    file=sys.stderr,
-                )
-
-    return new_needs, new_no
-
-
 def load_decisions(project_dir: Path) -> dict[str, dict]:
-    """Load classifier decisions from the log."""
     log_file = project_dir / ".claude" / "context" / "classifier.jsonl"
     decisions: dict[str, dict] = {}
     if log_file.exists():
@@ -166,84 +180,109 @@ def load_decisions(project_dir: Path) -> dict[str, dict]:
     return decisions
 
 
-def update_exemplars(project_dir: Path, new_needs: list[str], new_no: list[str]) -> None:
-    """Update the project-level exemplars.toml with new examples."""
-    exemplar_path = project_dir / ".claude" / "context" / "exemplars.toml"
-    exemplar_path.parent.mkdir(parents=True, exist_ok=True)
+# --- Quality scoring ---
 
-    # Load existing or start fresh
-    existing_needs: list[str] = []
-    existing_no: list[str] = []
 
-    if exemplar_path.exists():
-        with open(exemplar_path, "rb") as f:
-            data = tomllib.load(f)
-        existing_needs = data.get("needs_context", {}).get("examples", [])
-        existing_no = data.get("no_context", {}).get("examples", [])
+def score_exemplars(
+    model: TextEmbedding,
+    candidates: list[str],
+    bootstrap_embeds: np.ndarray,
+) -> list[tuple[str, float]]:
+    """Score each candidate by max cosine similarity to bootstrap exemplars."""
+    if not candidates:
+        return []
+    candidate_embeds = np.array(list(model.embed(candidates)))
+    scores = candidate_embeds @ bootstrap_embeds.T
+    max_scores = np.max(scores, axis=1)
+    return [(c, float(s)) for c, s in zip(candidates, max_scores)]
 
-    # Deduplicate and merge
-    needs_set = set(existing_needs)
-    no_set = set(existing_no)
 
-    added_needs = 0
-    added_no = 0
+def validate_and_rank(
+    model: TextEmbedding,
+    candidates: list[str],
+    existing: list[str],
+    bootstrap_embeds: np.ndarray,
+    max_n: int,
+) -> list[str]:
+    """Validate candidates against bootstrap, merge with existing, keep top N."""
+    # Combine all
+    all_exemplars = list(set(candidates + existing))
 
-    for prompt in new_needs:
-        short = prompt[:120]
-        if short not in needs_set and short not in no_set:
-            needs_set.add(short)
-            added_needs += 1
+    if not all_exemplars:
+        return []
 
-    for prompt in new_no:
-        short = prompt[:120]
-        if short not in no_set and short not in needs_set:
-            no_set.add(short)
-            added_no += 1
+    # Score against bootstrap
+    scored = score_exemplars(model, all_exemplars, bootstrap_embeds)
 
-    if added_needs == 0 and added_no == 0:
-        print("No new exemplars to add.", file=sys.stderr)
-        return
+    # Filter by quality threshold
+    qualified = [(ex, score) for ex, score in scored if score >= QUALITY_THRESHOLD]
 
-    # Write updated TOML
-    def escape_toml(s: str) -> str:
-        """Escape a string for TOML double-quoted value."""
-        return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\t", "\\t")
+    # Sort by score descending, keep top N
+    qualified.sort(key=lambda x: x[1], reverse=True)
+    return [ex for ex, _ in qualified[:max_n]]
 
-    if tomli_w is None:
-        with open(exemplar_path, "w") as f:
-            f.write("[needs_context]\nexamples = [\n")
-            for ex in sorted(needs_set):
-                f.write(f'    "{escape_toml(ex)}",\n')
-            f.write("]\n\n[no_context]\nexamples = [\n")
-            for ex in sorted(no_set):
-                f.write(f'    "{escape_toml(ex)}",\n')
-            f.write("]\n")
-    else:
-        data = {
-            "needs_context": {"examples": sorted(needs_set)},
-            "no_context": {"examples": sorted(no_set)},
-        }
-        with open(exemplar_path, "wb") as f:
-            tomli_w.dump(data, f)
 
-    print(
-        f"Updated {exemplar_path}: +{added_needs} needs_context, +{added_no} no_context "
-        f"(total: {len(needs_set)} / {len(no_set)})",
-        file=sys.stderr,
-    )
+# --- Global vs project split ---
 
-    # Embeddings will regenerate on next classifier daemon start
-    # (load_exemplars detects missing/stale .npy files)
-    print("Exemplars updated. Embeddings will regenerate on next session.", file=sys.stderr)
+
+def split_global_project(
+    model: TextEmbedding,
+    exemplars: list[str],
+    bootstrap_embeds: np.ndarray,
+    threshold: float = 0.65,
+) -> tuple[list[str], list[str]]:
+    """Split exemplars into global (generic) vs project (codebase-specific).
+
+    If an exemplar is highly similar to a bootstrap exemplar, it's a generic
+    pattern (global). If dissimilar, it's project-specific.
+    """
+    if not exemplars:
+        return [], []
+
+    embeds = np.array(list(model.embed(exemplars)))
+    scores = embeds @ bootstrap_embeds.T
+    max_scores = np.max(scores, axis=1)
+
+    global_exemplars = []
+    project_exemplars = []
+
+    for ex, score in zip(exemplars, max_scores):
+        if score >= threshold:
+            global_exemplars.append(ex)
+        else:
+            project_exemplars.append(ex)
+
+    return global_exemplars, project_exemplars
+
+
+# --- Write exemplars ---
+
+
+def escape_toml(s: str) -> str:
+    return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\t", "\\t")
+
+
+def write_exemplars(path: Path, needs: list[str], no_needs: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        f.write("[needs_context]\nexamples = [\n")
+        for ex in sorted(needs):
+            f.write(f'    "{escape_toml(ex)}",\n')
+        f.write("]\n\n[no_context]\nexamples = [\n")
+        for ex in sorted(no_needs):
+            f.write(f'    "{escape_toml(ex)}",\n')
+        f.write("]\n")
+
+
+# --- Main ---
 
 
 def main() -> None:
     project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", "."))
 
+    # Find transcript
     if "--auto" in sys.argv:
-        # Find the latest transcript
         transcript_dir = Path.home() / ".claude" / "projects"
-        # Derive project path key
         project_key = str(project_dir.resolve()).replace("/", "-").lstrip("-")
         project_transcript_dir = transcript_dir / project_key
         if not project_transcript_dir.exists():
@@ -262,22 +301,97 @@ def main() -> None:
 
     print(f"Analyzing: {transcript_path}", file=sys.stderr)
 
+    # Load everything
     messages = parse_transcript(transcript_path)
     turns = extract_turns(messages)
     decisions = load_decisions(project_dir)
+    bootstrap_needs, bootstrap_no = load_bootstrap()
 
     print(f"Found {len(turns)} turns, {len(decisions)} classifier decisions", file=sys.stderr)
 
-    new_needs, new_no = analyze_turns(turns, decisions)
+    # Extract candidates from transcript
+    candidate_needs: list[str] = []
+    candidate_no: list[str] = []
 
-    if new_needs or new_no:
+    for turn in turns:
+        prompt = turn["prompt"]
+        if prompt is None:
+            continue
+        tools = turn["tools"]
+        used_context_tools = tools & CONTEXT_TOOLS
+        actually_needed = len(used_context_tools) > 0
+        decision = decisions.get(prompt)
+
+        if decision is None:
+            # Bootstrap: learn from tool usage
+            if actually_needed:
+                candidate_needs.append(prompt)
+            elif tools and not (tools - SIMPLE_TOOLS - {""}):
+                candidate_no.append(prompt)
+        else:
+            classified_as_needing = decision.get("needs_context", False)
+            # Misclassifications
+            if not classified_as_needing and actually_needed:
+                candidate_needs.append(prompt)
+            elif classified_as_needing and not actually_needed and tools and not (tools - SIMPLE_TOOLS - {""}):
+                candidate_no.append(prompt)
+
+    if not candidate_needs and not candidate_no:
+        print("No new candidates found.", file=sys.stderr)
+        return
+
+    print(
+        f"Candidates: {len(candidate_needs)} needs_context, {len(candidate_no)} no_context",
+        file=sys.stderr,
+    )
+
+    # Load model and bootstrap embeddings
+    model = TextEmbedding("BAAI/bge-small-en-v1.5", threads=2)
+    bootstrap_needs_embeds = np.array(list(model.embed(bootstrap_needs)))
+    bootstrap_no_embeds = np.array(list(model.embed(bootstrap_no)))
+
+    # Load existing exemplars
+    project_exemplar_path = project_dir / ".claude" / "context" / "exemplars.toml"
+    global_exemplar_path = Path.home() / ".claude" / "context" / "exemplars.toml"
+    existing_project_needs, existing_project_no = load_existing_exemplars(project_exemplar_path)
+    existing_global_needs, existing_global_no = load_existing_exemplars(global_exemplar_path)
+
+    # Validate and rank needs_context against bootstrap needs
+    best_needs = validate_and_rank(
+        model, candidate_needs, existing_project_needs + existing_global_needs,
+        bootstrap_needs_embeds, MAX_EXEMPLARS_PER_CATEGORY,
+    )
+
+    # Validate and rank no_context against bootstrap no
+    best_no = validate_and_rank(
+        model, candidate_no, existing_project_no + existing_global_no,
+        bootstrap_no_embeds, MAX_EXEMPLARS_PER_CATEGORY,
+    )
+
+    # Split into global vs project
+    global_needs, project_needs = split_global_project(model, best_needs, bootstrap_needs_embeds)
+    global_no, project_no = split_global_project(model, best_no, bootstrap_no_embeds)
+
+    # Write project exemplars
+    if project_needs or project_no:
+        write_exemplars(project_exemplar_path, project_needs, project_no)
         print(
-            f"\nMisclassifications: {len(new_needs)} false negatives, {len(new_no)} false positives",
+            f"Project exemplars: {len(project_needs)} needs, {len(project_no)} no -> {project_exemplar_path}",
             file=sys.stderr,
         )
-        update_exemplars(project_dir, new_needs, new_no)
-    else:
-        print("No misclassifications found. Classifier is performing well.", file=sys.stderr)
+
+    # Write global exemplars (merge, don't replace)
+    if global_needs or global_no:
+        # Merge with existing global
+        merged_global_needs = list(set(existing_global_needs + global_needs))[:MAX_EXEMPLARS_PER_CATEGORY]
+        merged_global_no = list(set(existing_global_no + global_no))[:MAX_EXEMPLARS_PER_CATEGORY]
+        write_exemplars(global_exemplar_path, merged_global_needs, merged_global_no)
+        print(
+            f"Global exemplars: {len(merged_global_needs)} needs, {len(merged_global_no)} no -> {global_exemplar_path}",
+            file=sys.stderr,
+        )
+
+    print("Exemplars updated. Embeddings will regenerate on next session.", file=sys.stderr)
 
 
 if __name__ == "__main__":
