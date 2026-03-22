@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.7](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.6...v0.1.7) (2026-03-22)
+
+
+### Bug Fixes
+
+* use CLAUDE_PROJECT_DIR instead of undefined CWD in UserPromptSubmit hook ([#4](https://github.com/chrisfentiman/memsearch-enhanced/issues/4)) ([42c838d](https://github.com/chrisfentiman/memsearch-enhanced/commit/42c838dadf2d01981c24545109ddf7186a496cb5))
+
 ## [0.1.6](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.5...v0.1.6) (2026-03-22)
 
 
