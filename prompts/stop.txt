@@ -22,8 +22,10 @@ For each extraction, cite the user's exact words or the tool output as a
 supporting quote. If you cannot find a supporting quote, do not include
 that claim.
 
-Output 2-6 bullet points using these exact category prefixes.
-Omit empty categories. No preamble. Third person. Same language as the user.
+Output ONLY bullet points using these exact category prefixes.
+Start your response with "- " immediately. Do not include any introduction,
+explanation, or commentary before or after the bullets. Omit empty categories.
+Third person. Same language as the user.
 
 - CORRECTION: "AI did [X], user said: '[direct quote]'"
 - PREFERENCE: "User prefers [X] over [Y]. Quote: '[direct quote]'. Reason: [why]"
