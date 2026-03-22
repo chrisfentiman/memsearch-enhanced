@@ -88,7 +88,15 @@ PROMPT_FILE="$PLUGIN_ROOT/prompts/stop.txt"
 SUMMARY=""
 if command -v claude &>/dev/null && [ -f "$PROMPT_FILE" ]; then
   SYSTEM_PROMPT=$(cat "$PROMPT_FILE")
-  SUMMARY=$(printf '%s' "$PARSED" | MEMSEARCH_NO_WATCH=1 CLAUDECODE= claude -p \
+  # Wrap transcript with data markers so Haiku treats it as data, not conversation.
+  # The instruction to extract is placed AFTER the data (Anthropic recommendation).
+  USER_MSG="===BEGIN_TRANSCRIPT===
+${PARSED}
+===END_TRANSCRIPT===
+
+Extract durable knowledge from the transcript above. Output ONLY bullet points starting with - and a category prefix. Nothing else."
+
+  SUMMARY=$(printf '%s' "$USER_MSG" | MEMSEARCH_NO_WATCH=1 CLAUDECODE= claude -p \
     --model haiku \
     --no-session-persistence \
     --no-chrome \
