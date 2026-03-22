@@ -158,22 +158,29 @@ def extract_turns(messages: list[dict]) -> list[dict]:
 
 
 def infer_category(tools: set[str]) -> str | None:
-    """Infer the ground truth category from tool usage."""
+    """Infer the ground truth category from tool usage.
+
+    The key insight: using project tools (Read/Edit/Write/Glob/Grep) alone
+    does NOT mean context was needed. It just means the user gave a direct
+    instruction that involved files. Context is only "needed" when external
+    sources (MCP, Agent, Skill) were also used alongside project tools.
+    """
     used_project = tools & PROJECT_TOOLS
     used_research = tools & RESEARCH_TOOLS
     used_routine = tools & ROUTINE_TOOLS
     used_mcp = {t for t in tools if t.startswith(MCP_PREFIX)}
+    used_context = used_mcp or used_research
 
-    # MCP tools + file tools = project context needed
-    if used_project or (used_mcp and used_project):
+    # Context tools + project tools = needed project-specific context
+    if used_context and used_project:
         return "needs_context_project"
-    # MCP or research tools alone = global/memory context needed
-    if used_mcp or used_research:
+    # Context tools alone = needed memory/research but not project files
+    if used_context:
         return "needs_context_generic"
-    # Only routine tools = no context, project work
-    if used_routine:
+    # Project tools alone = direct file work, no context needed
+    if used_project or used_routine:
         return "no_context_project"
-    # No tools at all = no context, global
+    # No tools at all = no context, generic
     if not tools:
         return "no_context_generic"
     return None
