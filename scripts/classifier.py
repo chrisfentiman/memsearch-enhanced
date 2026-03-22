@@ -5,17 +5,18 @@
 """
 Shared semantic classifier daemon for memsearch-enhanced.
 
+Four-category routing:
+  - needs_context_project: inject code context + memories
+  - needs_context_global: inject memories only
+  - no_context_project: skip (routine project work)
+  - no_context_global: skip (general question)
+
 One daemon serves ALL Claude Code sessions. First session starts it,
 others reuse. Idle timeout auto-exits after no requests.
 
 Protocol (Unix socket, JSON):
   Request:  {"prompt": "...", "project": "/path/to/repo"}
-  Response: {"needs_context": true, "ctx_score": 0.72, "no_ctx_score": 0.41}
-
-Usage:
-  uv run classifier.py --daemon          # start shared daemon
-  uv run classifier.py --generate        # generate default exemplar embeddings
-  uv run classifier.py "prompt" /path    # single-shot classify
+  Response: {"category": "needs_context_project", "scores": {...}, "inject": true}
 """
 
 from __future__ import annotations
@@ -26,7 +27,6 @@ import signal
 import socket
 import sys
 import time
-import threading
 from pathlib import Path
 
 import numpy as np
@@ -48,37 +48,49 @@ else:
 SOCKET_PATH = "/tmp/memsearch-classify.sock"
 LOCK_PATH = "/tmp/memsearch-classify.lock"
 MODEL_NAME = "BAAI/bge-small-en-v1.5"
-IDLE_TIMEOUT_SECONDS = 1800  # 30 minutes
+IDLE_TIMEOUT_SECONDS = 1800
 SCRIPT_DIR = Path(__file__).parent
-GLOBAL_EXEMPLARS_DIR = Path.home() / ".claude" / "context"
 THRESHOLD = 0.40
+
+CATEGORIES = [
+    "needs_context_project",
+    "needs_context_global",
+    "no_context_project",
+    "no_context_global",
+]
+
+# Categories that trigger context injection
+INJECT_CATEGORIES = {"needs_context_project", "needs_context_global"}
 
 
 # --- Exemplar loading ---
 
 
-def _load_toml(path: Path) -> tuple[list[str], list[str]] | None:
-    """Load exemplars from a TOML file. Returns None if invalid."""
+def _load_toml(path: Path) -> dict[str, list[str]] | None:
+    """Load exemplars from a four-category TOML file."""
     if not path.is_file():
         return None
     try:
         with open(path, "rb") as f:
             data = tomllib.load(f)
-        needs = data.get("needs_context", {}).get("examples", [])
-        no_needs = data.get("no_context", {}).get("examples", [])
-        if needs and no_needs:
-            return needs, no_needs
+        result = {}
+        for cat in CATEGORIES:
+            examples = data.get(cat, {}).get("examples", [])
+            if examples:
+                result[cat] = examples
+        if len(result) >= 2:  # need at least 2 categories
+            return result
     except Exception:
         pass
     return None
 
 
-def load_exemplars_for_project(project: str) -> tuple[list[str], list[str]]:
+def load_exemplars_for_project(project: str) -> dict[str, list[str]]:
     """Load exemplar lists from config chain for a specific project."""
     project_path = Path(project)
     sources = [
         project_path / ".claude" / "context" / "exemplars.toml",
-        GLOBAL_EXEMPLARS_DIR / "exemplars.toml",
+        Path.home() / ".claude" / "context" / "exemplars.toml",
         SCRIPT_DIR / "exemplars.toml",
     ]
     for path in sources:
@@ -86,59 +98,59 @@ def load_exemplars_for_project(project: str) -> tuple[list[str], list[str]]:
         if result:
             return result
 
-    # Minimal fallback
-    return (
-        ["fix the bug", "what did we decide", "refactor the module", "why is the test failing"],
-        ["hello", "thanks", "what is REST", "explain git branching"],
-    )
+    # Minimal fallback (two categories)
+    return {
+        "needs_context_project": ["fix the bug in the auth module", "how does the caching work"],
+        "needs_context_global": ["continue where we left off", "what did we decide"],
+        "no_context_project": ["update the readme", "run the tests"],
+        "no_context_global": ["hello", "what is REST"],
+    }
 
 
 # --- Per-project embedding cache ---
 
 
 class ProjectCache:
-    """Caches exemplar embeddings per project, auto-regenerates when stale."""
+    """Caches exemplar embeddings per project per category."""
 
     def __init__(self, model: TextEmbedding):
         self.model = model
-        self._cache: dict[str, tuple[np.ndarray, np.ndarray, float]] = {}  # project -> (ctx, no_ctx, mtime)
+        # project -> {category -> (embeddings, mtime)}
+        self._cache: dict[str, dict[str, tuple[np.ndarray, float]]] = {}
 
-    def get(self, project: str) -> tuple[np.ndarray, np.ndarray]:
-        """Get exemplar embeddings for a project, regenerating if needed."""
+    def get(self, project: str) -> dict[str, np.ndarray]:
+        """Get exemplar embeddings for all categories for a project."""
         project_path = Path(project)
         toml_path = project_path / ".claude" / "context" / "exemplars.toml"
-
-        # Check if cache is valid
         current_mtime = toml_path.stat().st_mtime if toml_path.exists() else 0.0
 
         if project in self._cache:
-            ctx, no_ctx, cached_mtime = self._cache[project]
+            # Check if cache is still valid (use first category's mtime)
+            first_cat = next(iter(self._cache[project]))
+            _, cached_mtime = self._cache[project][first_cat]
             if cached_mtime >= current_mtime:
-                return ctx, no_ctx
+                return {cat: emb for cat, (emb, _) in self._cache[project].items()}
 
         # Generate fresh embeddings
-        needs, no_needs = load_exemplars_for_project(project)
-        ctx = np.array(list(self.model.embed(needs)))
-        no_ctx = np.array(list(self.model.embed(no_needs)))
-        self._cache[project] = (ctx, no_ctx, current_mtime)
-
-        return ctx, no_ctx
+        exemplars = load_exemplars_for_project(project)
+        cached = {}
+        result = {}
+        for cat, examples in exemplars.items():
+            emb = np.array(list(self.model.embed(examples)))
+            cached[cat] = (emb, current_mtime)
+            result[cat] = emb
+        self._cache[project] = cached
+        return result
 
 
 # --- Decision logging ---
 
 
 def log_decision(project: str, prompt: str, result: dict) -> None:
-    """Append classification decision to the project's log."""
     log_dir = Path(project) / ".claude" / "context"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "classifier.jsonl"
-
-    entry = {
-        "timestamp": time.time(),
-        "prompt": prompt[:200],
-        **result,
-    }
+    entry = {"timestamp": time.time(), "prompt": prompt[:200], **result}
     try:
         with open(log_file, "a") as f:
             f.write(json.dumps(entry) + "\n")
@@ -155,22 +167,48 @@ def classify(
     prompt: str,
     project: str,
 ) -> dict:
-    """Classify a prompt as needing project context or not."""
+    """Classify a prompt into one of four categories."""
     if len(prompt.strip()) < 10:
-        return {"needs_context": False, "ctx_score": 0.0, "no_ctx_score": 0.0, "reason": "too_short"}
+        return {
+            "category": "no_context_global",
+            "inject": False,
+            "scores": {},
+            "reason": "too_short",
+        }
 
-    ctx_embeds, no_ctx_embeds = cache.get(project)
-    emb = np.array(list(model.embed([prompt])))[0]
+    cat_embeds = cache.get(project)
+    query_emb = np.array(list(model.embed([prompt])))[0]
 
-    ctx_score = float(np.max(emb @ ctx_embeds.T))
-    no_ctx_score = float(np.max(emb @ no_ctx_embeds.T))
+    # Score against each category
+    scores = {}
+    for cat, embeds in cat_embeds.items():
+        similarities = query_emb @ embeds.T
+        scores[cat] = round(float(np.max(similarities)), 4)
 
-    needs_context = ctx_score > no_ctx_score and ctx_score > THRESHOLD
+    # Best category
+    best_cat = max(scores, key=scores.get)
+    best_score = scores[best_cat]
+
+    # Must exceed threshold
+    if best_score < THRESHOLD:
+        best_cat = "no_context_global"
+
+    inject = best_cat in INJECT_CATEGORIES
+
+    # Check for ambiguity: if top two scores are within 0.05,
+    # and either needs context, err on the side of injecting
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    if len(sorted_scores) >= 2:
+        top_cat, top_score = sorted_scores[0]
+        second_cat, second_score = sorted_scores[1]
+        if top_score - second_score < 0.05 and second_cat in INJECT_CATEGORIES:
+            inject = True
+            best_cat = second_cat  # prefer the inject category
 
     result = {
-        "needs_context": needs_context,
-        "ctx_score": round(ctx_score, 4),
-        "no_ctx_score": round(no_ctx_score, 4),
+        "category": best_cat,
+        "inject": inject,
+        "scores": scores,
     }
 
     try:
@@ -185,27 +223,23 @@ def classify(
 
 
 def acquire_lock() -> bool:
-    """Try to acquire the daemon lock. Returns True if we got it."""
     try:
         fd = os.open(LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         os.write(fd, str(os.getpid()).encode())
         os.close(fd)
         return True
     except FileExistsError:
-        # Check if the existing daemon is still alive
         try:
             with open(LOCK_PATH) as f:
                 pid = int(f.read().strip())
-            os.kill(pid, 0)  # signal 0 = check if alive
-            return False  # daemon is running
+            os.kill(pid, 0)
+            return False
         except (ValueError, ProcessLookupError, PermissionError):
-            # Stale lock
             os.unlink(LOCK_PATH)
             return acquire_lock()
 
 
 def serve() -> None:
-    """Run as a shared Unix socket daemon with idle timeout."""
     if not acquire_lock():
         print("[classifier] Another daemon is already running", file=sys.stderr)
         sys.exit(0)
@@ -222,26 +256,23 @@ def serve() -> None:
     sock.settimeout(IDLE_TIMEOUT_SECONDS)
 
     def cleanup(*_):
-        try:
-            os.unlink(SOCKET_PATH)
-        except OSError:
-            pass
-        try:
-            os.unlink(LOCK_PATH)
-        except OSError:
-            pass
+        for p in [SOCKET_PATH, LOCK_PATH]:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, cleanup)
     signal.signal(signal.SIGINT, cleanup)
 
-    print(f"[classifier] Listening on {SOCKET_PATH} (idle timeout: {IDLE_TIMEOUT_SECONDS}s)", file=sys.stderr)
+    print(f"[classifier] 4-category router on {SOCKET_PATH}", file=sys.stderr)
 
     while True:
         try:
             conn, _ = sock.accept()
         except socket.timeout:
-            print("[classifier] Idle timeout reached, shutting down", file=sys.stderr)
+            print("[classifier] Idle timeout, shutting down", file=sys.stderr)
             cleanup()
             break
 
@@ -262,43 +293,25 @@ def serve() -> None:
         except Exception as e:
             print(f"[classifier] Error: {e}", file=sys.stderr)
             try:
-                conn.sendall(json.dumps({"needs_context": False, "error": str(e)}).encode())
+                conn.sendall(json.dumps({"category": "no_context_global", "inject": False}).encode())
             except Exception:
                 pass
         finally:
             conn.close()
 
 
-# --- Entry points ---
-
-
-def generate_default_exemplars() -> None:
-    """Generate embeddings for the default exemplar set."""
-    model = TextEmbedding(MODEL_NAME, threads=2)
-    needs, no_needs = load_exemplars_for_project(".")
-    ctx = np.array(list(model.embed(needs)))
-    no_ctx = np.array(list(model.embed(no_needs)))
-
-    GLOBAL_EXEMPLARS_DIR.mkdir(parents=True, exist_ok=True)
-    np.save(GLOBAL_EXEMPLARS_DIR / "exemplars_context.npy", ctx)
-    np.save(GLOBAL_EXEMPLARS_DIR / "exemplars_no_context.npy", no_ctx)
-    print(f"Generated: {len(needs)} context, {len(no_needs)} no-context", file=sys.stderr)
-
-
 def main() -> None:
     if "--daemon" in sys.argv:
         serve()
-    elif "--generate" in sys.argv:
-        generate_default_exemplars()
     elif len(sys.argv) > 1 and not sys.argv[1].startswith("--"):
         prompt = sys.argv[1]
         project = sys.argv[2] if len(sys.argv) > 2 else "."
         model = TextEmbedding(MODEL_NAME, threads=2)
         cache = ProjectCache(model)
         result = classify(model, cache, prompt, project)
-        print(json.dumps(result))
+        print(json.dumps(result, indent=2))
     else:
-        print("Usage: classifier.py [--daemon | --generate | 'prompt' [project_path]]")
+        print("Usage: classifier.py [--daemon | 'prompt' [project_path]]")
         sys.exit(1)
 
 

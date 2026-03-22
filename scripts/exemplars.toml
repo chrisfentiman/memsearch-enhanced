@@ -1,66 +1,99 @@
-# Semantic classifier exemplars for memsearch-enhanced.
+# Bootstrap exemplars for the semantic classifier.
 #
-# These examples train the classifier to decide whether a user's prompt
-# needs project context injected. Update based on observed misclassifications.
+# Four categories for routing context injection decisions.
+# Each exemplar is conversational in style (how users actually type),
+# 20-50 words, covering a distinct sub-type within the category.
 #
-# Location priority:
-#   1. .memsearch-enhanced.toml (project-level)
-#   2. ~/.config/memsearch-enhanced/exemplars.toml (global)
-#   3. This file (plugin default)
+# This file is the quality gate. Project and global exemplars
+# are validated against these before being accepted.
+#
+# Do not modify this file for per-project tuning. Instead:
+#   - <project>/.claude/context/exemplars.toml  (project-specific)
+#   - ~/.claude/context/exemplars.toml          (global)
 
-[needs_context]
-# Prompts that NEED project-specific context (code, memories, decisions)
+[needs_context_project]
+# Prompts requiring project-specific code, architecture, or design context.
+# Signals: references to modules, integration points, current patterns, specific files.
 examples = [
-    # Direct code/project references
-    "fix the bug in the authentication module",
-    "refactor the database connection layer",
-    "what does the config parser do",
-    "update the API endpoint for user registration",
-    "why is the test failing in CI",
-    "add error handling to the payment flow",
-    "how does the caching layer work",
-    "where is the error handling code",
-    "review the recent changes to auth",
-    "what architecture decisions did we make",
-    # Implicit project references
-    "continue where we left off",
-    "what were we working on yesterday",
-    "why did we switch from REST to GraphQL",
-    "what was the decision about the database",
-    "how did we handle the auth migration",
-    "what corrections did the user make",
-    "what blockers did we find",
-    "what did the research say about this",
-    # History/memory references
-    "what did we decide about the config format",
-    "do you remember the issue with the mocks",
+    # Architecture / integration
+    "how does the auth middleware integrate with the session handler",
+    "what pattern are we using for the database connection pooling",
+    "where does the config validation happen in the startup flow",
+    "can you trace how a request flows through the API gateway to the worker",
+    # Refactoring / design decisions
+    "should we refactor the payment module to use the strategy pattern",
+    "why is the caching layer structured this way instead of using Redis directly",
+    "what would break if we changed the user model schema",
+    # Debugging project-specific issues
+    "why is the CI pipeline failing on the integration tests",
+    "the auth token refresh is broken, can you look at the middleware",
+    "there's a race condition in the queue consumer, how is it set up",
+    # Code review / understanding
+    "review the recent changes to the API routes",
+    "walk me through how the event system works in this codebase",
 ]
 
-[no_context]
-# Prompts that DON'T need project context
+[needs_context_global]
+# Prompts needing session history or memory but not project-specific code.
+# Signals: temporal references, continuity markers, past decisions, user corrections.
 examples = [
-    # General knowledge
+    # Session continuity
+    "continue where we left off",
+    "what were we working on before I stepped away",
+    "can you pick up from where we stopped yesterday",
+    # Past decisions / history
+    "why did we decide to use that approach",
+    "what corrections did you get from me earlier",
+    "do you remember the issue we ran into with the mocks",
+    "what was the blocker we found last time",
+    # Learning from past sessions
+    "what patterns have we established for error handling",
+    "how did we solve the similar problem before",
+    "what did the research say about that topic",
+    # Preferences / accumulated knowledge
+    "what tools does this user prefer for debugging",
+    "are there any conventions I should follow here based on past feedback",
+]
+
+[no_context_project]
+# Project-related but routine execution. No context injection needed.
+# Signals: direct actions, standard operations, clear instructions.
+examples = [
+    # Routine file operations
+    "update the readme with the new install steps",
+    "add a gitignore entry for the build folder",
+    "rename the variable from camelCase to snake_case",
+    # Standard commands
+    "run the test suite",
+    "commit these changes with a descriptive message",
+    "push this branch and open a PR",
+    # Simple implementations
+    "add a health check endpoint that returns 200",
+    "write a unit test for this function",
+    "fix the typo on line 42",
+    # Formatting / cleanup
+    "format this file according to our linter",
+    "remove the unused imports",
+    "sort the dependencies alphabetically",
+]
+
+[no_context_global]
+# General knowledge, casual, meta. Entirely generic.
+# Signals: conceptual questions, greetings, acknowledgments, learning.
+examples = [
+    # General programming knowledge
     "what is a Python decorator",
-    "explain how HTTP works",
-    "write a hello world program",
-    "what's the difference between TCP and UDP",
-    "how do I install numpy",
-    "explain git branching",
-    "what is REST",
-    # Hard negatives (sound project-ish but generic)
-    "how do I write unit tests",
-    "what's the best way to handle errors in Python",
-    "how to set up CI/CD",
-    "explain dependency injection",
-    "best practices for database migrations",
-    "how does docker compose work",
+    "explain the difference between REST and GraphQL",
+    "how does async/await work in JavaScript",
+    "what are the SOLID principles",
+    # Tool / framework questions (not project-specific)
+    "how do I set up a virtual environment",
+    "explain how docker compose networking works",
     "what is semantic versioning",
-    # Short/casual
-    "hello",
+    "how does git rebase differ from merge",
+    # Casual / meta
     "thanks",
-    "yes",
-    "no",
     "looks good",
+    "yes do it",
     "ok",
-    "got it",
 ]
