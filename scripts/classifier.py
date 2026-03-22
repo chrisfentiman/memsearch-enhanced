@@ -50,6 +50,7 @@ LOCK_PATH = "/tmp/memsearch-classify.lock"
 MODEL_NAME = "BAAI/bge-small-en-v1.5"
 IDLE_TIMEOUT_SECONDS = 1800
 SCRIPT_DIR = Path(__file__).parent
+PLUGIN_VERSION = (SCRIPT_DIR.parent / "version.txt").read_text().strip() if (SCRIPT_DIR.parent / "version.txt").exists() else "unknown"
 THRESHOLD = 0.40
 
 CATEGORIES = [
@@ -329,11 +330,15 @@ def serve() -> None:
                 data += chunk
 
             request = json.loads(data.decode("utf-8", errors="replace"))
-            prompt = request.get("prompt", "")
-            project = request.get("project", ".")
+            req_type = request.get("type", "classify")
 
-            result = classify(model, cache, prompt, project)
-            conn.sendall(json.dumps(result).encode())
+            if req_type == "version":
+                conn.sendall(json.dumps({"version": PLUGIN_VERSION}).encode())
+            else:
+                prompt = request.get("prompt", "")
+                project = request.get("project", ".")
+                result = classify(model, cache, prompt, project)
+                conn.sendall(json.dumps(result).encode())
         except Exception as e:
             print(f"[classifier] Error: {e}", file=sys.stderr)
             try:

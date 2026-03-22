@@ -148,11 +148,33 @@ fi
 
 # Start the shared semantic classifier daemon (if not already running).
 # One daemon serves all Claude Code sessions. Idle-timeouts after 30 min.
+# If a daemon is running with an older plugin version, kill and restart it.
 CLASSIFIER_SCRIPT="$SCRIPT_DIR/../scripts/classifier.py"
 CLASSIFIER_SOCKET="/tmp/memsearch-classify.sock"
+PLUGIN_VERSION=""
+if [ -f "$SCRIPT_DIR/../version.txt" ]; then
+  PLUGIN_VERSION=$(cat "$SCRIPT_DIR/../version.txt" 2>/dev/null | tr -d '[:space:]')
+fi
+
 if [ -f "$CLASSIFIER_SCRIPT" ] && command -v uv &>/dev/null; then
+  NEED_START=false
   if [ ! -S "$CLASSIFIER_SOCKET" ]; then
-    # No daemon running, start one
+    NEED_START=true
+  elif [ -n "$PLUGIN_VERSION" ]; then
+    # Daemon is running - check its version.
+    # If the daemon is too old to handle version requests, it will return
+    # a classify result or error instead of a version string. Treat any
+    # response that doesn't match the expected version as "needs restart".
+    DAEMON_VERSION=$(echo '{"type":"version"}' | nc -U "$CLASSIFIER_SOCKET" -w 2 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo "")
+    if [ "$DAEMON_VERSION" != "$PLUGIN_VERSION" ]; then
+      # Version mismatch or unrecognized response - kill old daemon
+      pkill -f "classifier.py --daemon" 2>/dev/null || true
+      sleep 1
+      [ -S "$CLASSIFIER_SOCKET" ] && rm -f "$CLASSIFIER_SOCKET"
+      NEED_START=true
+    fi
+  fi
+  if [ "$NEED_START" = true ]; then
     nohup uv run "$CLASSIFIER_SCRIPT" --daemon </dev/null &>/dev/null &
   fi
 fi
