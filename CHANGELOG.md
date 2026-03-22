@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.8](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.7...v0.1.8) (2026-03-22)
+
+
+### Features
+
+* expand bootstrap exemplars to 2052 with compile script ([#7](https://github.com/chrisfentiman/memsearch-enhanced/issues/7)) ([213a869](https://github.com/chrisfentiman/memsearch-enhanced/commit/213a869c7d8a24b4f4fb6fafadae5347aa17ff16))
+
 ## [0.1.7](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.6...v0.1.7) (2026-03-22)
 
 
