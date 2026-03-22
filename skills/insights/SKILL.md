@@ -23,7 +23,7 @@ Search memsearch for patterns that repeat across sessions:
 Memsearch has three layers of progressively deeper recall:
 
 ### L1: Search
-Run `memsearch search "<query>" --top-k 10 --json-output --collection <collection>`
+Run `memsearch search "<query>" --top-k 10 --json-output`
 to find relevant memory chunks. Start with broad queries:
 - "CORRECTION:" or "user corrected" or "user wanted"
 - "PREFERENCE:" or "user prefers" or "always"
@@ -31,7 +31,7 @@ to find relevant memory chunks. Start with broad queries:
 - "BLOCKER:" or "do not" or "doesn't work"
 
 ### L2: Expand
-For promising results, run `memsearch expand <chunk_hash> --collection <collection>`
+For promising results, run `memsearch expand <chunk_hash>`
 to see the full markdown section with context.
 
 ### L3: Transcript drill-down
