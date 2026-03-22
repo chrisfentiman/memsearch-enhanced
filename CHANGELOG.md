@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.13](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.12...v0.1.13) (2026-03-22)
+
+
+### Features
+
+* mid-session daemon version check via stamp file ([#17](https://github.com/chrisfentiman/memsearch-enhanced/issues/17)) ([2e18da5](https://github.com/chrisfentiman/memsearch-enhanced/commit/2e18da5293d03bb9ed8156b4c083bd9dec7f1d7a))
+
 ## [0.1.12](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.11...v0.1.12) (2026-03-22)
 
 
