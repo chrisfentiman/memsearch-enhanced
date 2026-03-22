@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.10](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.9...v0.1.10) (2026-03-22)
+
+
+### Bug Fixes
+
+* make SessionEnd hook async with 120s timeout ([#11](https://github.com/chrisfentiman/memsearch-enhanced/issues/11)) ([1ea7f0d](https://github.com/chrisfentiman/memsearch-enhanced/commit/1ea7f0dbd778c23a285cfcfcde220d420b5b2336))
+
 ## [0.1.9](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.8...v0.1.9) (2026-03-22)
 
 
