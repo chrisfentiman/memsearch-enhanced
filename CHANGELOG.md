@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.15](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.14...v0.1.15) (2026-03-22)
+
+
+### Bug Fixes
+
+* remove hardcoded collection flag from skills ([#21](https://github.com/chrisfentiman/memsearch-enhanced/issues/21)) ([3bf6672](https://github.com/chrisfentiman/memsearch-enhanced/commit/3bf667227a6877598e891d2f2a9d126707730bdb))
+
 ## [0.1.14](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.13...v0.1.14) (2026-03-22)
 
 
