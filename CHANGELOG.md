@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.12](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.11...v0.1.12) (2026-03-22)
+
+
+### Features
+
+* version check for classifier daemon on session start ([#15](https://github.com/chrisfentiman/memsearch-enhanced/issues/15)) ([2960361](https://github.com/chrisfentiman/memsearch-enhanced/commit/2960361d2ce8d1e55f9625641ef8fec60afc7e4b))
+
 ## [0.1.11](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.10...v0.1.11) (2026-03-22)
 
 
