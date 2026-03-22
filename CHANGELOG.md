@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.9](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.8...v0.1.9) (2026-03-22)
+
+
+### Bug Fixes
+
+* skip system/XML prompts in UserPromptSubmit hook ([#9](https://github.com/chrisfentiman/memsearch-enhanced/issues/9)) ([c21e284](https://github.com/chrisfentiman/memsearch-enhanced/commit/c21e2843010da44aa3e238e22282d2fe6476e782))
+
 ## [0.1.8](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.7...v0.1.8) (2026-03-22)
 
 
