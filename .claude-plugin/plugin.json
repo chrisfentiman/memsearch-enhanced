@@ -1,7 +1,7 @@
 {
   "name": "memsearch-enhanced",
   "description": "Enhanced memory hooks and skills for memsearch. Better summarization (observations over actions), improved recall (multi-query + reranking), and an insights skill for promoting patterns to auto-memory.",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "author": {
     "name": "Chris Fentiman"
   }
