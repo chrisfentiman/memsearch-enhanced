@@ -33,7 +33,7 @@ examples = [
     "walk me through how the event system works in this codebase",
 ]
 
-[needs_context_global]
+[needs_context_generic]
 # Prompts needing session history or memory but not project-specific code.
 # Signals: temporal references, continuity markers, past decisions, user corrections.
 examples = [
@@ -77,7 +77,7 @@ examples = [
     "sort the dependencies alphabetically",
 ]
 
-[no_context_global]
+[no_context_generic]
 # General knowledge, casual, meta. Entirely generic.
 # Signals: conceptual questions, greetings, acknowledgments, learning.
 examples = [

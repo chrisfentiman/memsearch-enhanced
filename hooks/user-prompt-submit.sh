@@ -25,13 +25,13 @@ fi
 CLASSIFIER_SOCKET="/tmp/memsearch-classify.sock"
 NEEDS_CONTEXT=false
 
-CATEGORY="no_context_global"
+CATEGORY="no_context_generic"
 INJECT=false
 
 if [ -S "$CLASSIFIER_SOCKET" ]; then
   REQUEST=$(python3 -c "import json,sys; print(json.dumps({'prompt': sys.argv[1], 'project': sys.argv[2]}))" "$PROMPT" "$CWD" 2>/dev/null || echo '{}')
   RESULT=$(printf '%s' "$REQUEST" | nc -U "$CLASSIFIER_SOCKET" -w 2 2>/dev/null || echo '{}')
-  CATEGORY=$(_json_val "$RESULT" "category" "no_context_global")
+  CATEGORY=$(_json_val "$RESULT" "category" "no_context_generic")
   INJECT=$(_json_val "$RESULT" "inject" "false")
 fi
 

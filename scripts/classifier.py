@@ -7,9 +7,9 @@ Shared semantic classifier daemon for memsearch-enhanced.
 
 Four-category routing:
   - needs_context_project: inject code context + memories
-  - needs_context_global: inject memories only
+  - needs_context_generic: inject memories only
   - no_context_project: skip (routine project work)
-  - no_context_global: skip (general question)
+  - no_context_generic: skip (general question)
 
 One daemon serves ALL Claude Code sessions. First session starts it,
 others reuse. Idle timeout auto-exits after no requests.
@@ -54,13 +54,13 @@ THRESHOLD = 0.40
 
 CATEGORIES = [
     "needs_context_project",
-    "needs_context_global",
+    "needs_context_generic",
     "no_context_project",
-    "no_context_global",
+    "no_context_generic",
 ]
 
 # Categories that trigger context injection
-INJECT_CATEGORIES = {"needs_context_project", "needs_context_global"}
+INJECT_CATEGORIES = {"needs_context_project", "needs_context_generic"}
 
 
 # --- Exemplar loading ---
@@ -101,46 +101,67 @@ def load_exemplars_for_project(project: str) -> dict[str, list[str]]:
     # Minimal fallback (two categories)
     return {
         "needs_context_project": ["fix the bug in the auth module", "how does the caching work"],
-        "needs_context_global": ["continue where we left off", "what did we decide"],
+        "needs_context_generic": ["continue where we left off", "what did we decide"],
         "no_context_project": ["update the readme", "run the tests"],
-        "no_context_global": ["hello", "what is REST"],
+        "no_context_generic": ["hello", "what is REST"],
     }
 
 
 # --- Per-project embedding cache ---
 
 
-class ProjectCache:
-    """Caches exemplar embeddings per project per category."""
+class EmbeddingCache:
+    """Caches exemplar embeddings per source file, auto-regenerates when stale."""
 
     def __init__(self, model: TextEmbedding):
         self.model = model
-        # project -> {category -> (embeddings, mtime)}
-        self._cache: dict[str, dict[str, tuple[np.ndarray, float]]] = {}
+        # path_str -> {category -> (embeddings, mtime)}
+        self._cache: dict[str, tuple[dict[str, np.ndarray], float]] = {}
 
-    def get(self, project: str) -> dict[str, np.ndarray]:
-        """Get exemplar embeddings for all categories for a project."""
-        project_path = Path(project)
-        toml_path = project_path / ".claude" / "context" / "exemplars.toml"
-        current_mtime = toml_path.stat().st_mtime if toml_path.exists() else 0.0
+    def _load_and_embed(self, path: Path) -> tuple[dict[str, np.ndarray], float]:
+        """Load a TOML file and embed all categories."""
+        mtime = path.stat().st_mtime if path.exists() else 0.0
+        result: dict[str, np.ndarray] = {}
 
-        if project in self._cache:
-            # Check if cache is still valid (use first category's mtime)
-            first_cat = next(iter(self._cache[project]))
-            _, cached_mtime = self._cache[project][first_cat]
-            if cached_mtime >= current_mtime:
-                return {cat: emb for cat, (emb, _) in self._cache[project].items()}
+        loaded = _load_toml(path)
+        if loaded:
+            for cat, examples in loaded.items():
+                if examples:
+                    result[cat] = np.array(list(self.model.embed(examples)))
 
-        # Generate fresh embeddings
-        exemplars = load_exemplars_for_project(project)
-        cached = {}
-        result = {}
-        for cat, examples in exemplars.items():
-            emb = np.array(list(self.model.embed(examples)))
-            cached[cat] = (emb, current_mtime)
-            result[cat] = emb
-        self._cache[project] = cached
-        return result
+        return result, mtime
+
+    def get_for_file(self, path: Path) -> dict[str, np.ndarray]:
+        """Get embeddings for a specific TOML file, regenerating if stale."""
+        key = str(path)
+        current_mtime = path.stat().st_mtime if path.exists() else 0.0
+
+        if key in self._cache:
+            cached_embeds, cached_mtime = self._cache[key]
+            if cached_mtime >= current_mtime and current_mtime > 0:
+                return cached_embeds
+
+        if not path.exists():
+            return {}
+
+        embeds, mtime = self._load_and_embed(path)
+        self._cache[key] = (embeds, mtime)
+        return embeds
+
+    def get_for_project(self, project: str) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], dict[str, np.ndarray]]:
+        """Get project, global, and bootstrap embeddings separately.
+
+        Returns: (project_embeds, global_embeds, bootstrap_embeds)
+        """
+        project_path = Path(project) / ".claude" / "context" / "exemplars.toml"
+        global_path = Path.home() / ".claude" / "context" / "exemplars.toml"
+        bootstrap_path = SCRIPT_DIR / "exemplars.toml"
+
+        return (
+            self.get_for_file(project_path),
+            self.get_for_file(global_path),
+            self.get_for_file(bootstrap_path),
+        )
 
 
 # --- Decision logging ---
@@ -161,49 +182,72 @@ def log_decision(project: str, prompt: str, result: dict) -> None:
 # --- Classification ---
 
 
+PROJECT_WEIGHT = 1.15  # project exemplars get 15% boost
+
+
 def classify(
     model: TextEmbedding,
-    cache: ProjectCache,
+    cache: EmbeddingCache,
     prompt: str,
     project: str,
 ) -> dict:
-    """Classify a prompt into one of four categories."""
+    """Classify a prompt into one of four categories.
+
+    Scoring priority: project > global > bootstrap.
+    Project exemplars get a weight boost so they override global when close.
+    """
     if len(prompt.strip()) < 10:
         return {
-            "category": "no_context_global",
+            "category": "no_context_generic",
             "inject": False,
             "scores": {},
             "reason": "too_short",
         }
 
-    cat_embeds = cache.get(project)
+    project_embeds, global_embeds, bootstrap_embeds = cache.get_for_project(project)
     query_emb = np.array(list(model.embed([prompt])))[0]
 
-    # Score against each category
-    scores = {}
-    for cat, embeds in cat_embeds.items():
-        similarities = query_emb @ embeds.T
-        scores[cat] = round(float(np.max(similarities)), 4)
+    # Score against each tier, take the best score per category
+    scores: dict[str, float] = {cat: 0.0 for cat in CATEGORIES}
+
+    for cat in CATEGORIES:
+        cat_scores = []
+
+        # Project exemplars (weighted higher)
+        if cat in project_embeds and project_embeds[cat].shape[0] > 0:
+            s = float(np.max(query_emb @ project_embeds[cat].T))
+            cat_scores.append(s * PROJECT_WEIGHT)
+
+        # Global exemplars
+        if cat in global_embeds and global_embeds[cat].shape[0] > 0:
+            s = float(np.max(query_emb @ global_embeds[cat].T))
+            cat_scores.append(s)
+
+        # Bootstrap exemplars (fallback)
+        if cat in bootstrap_embeds and bootstrap_embeds[cat].shape[0] > 0:
+            s = float(np.max(query_emb @ bootstrap_embeds[cat].T))
+            cat_scores.append(s)
+
+        if cat_scores:
+            scores[cat] = round(max(cat_scores), 4)
 
     # Best category
     best_cat = max(scores, key=scores.get)
     best_score = scores[best_cat]
 
-    # Must exceed threshold
     if best_score < THRESHOLD:
-        best_cat = "no_context_global"
+        best_cat = "no_context_generic"
 
     inject = best_cat in INJECT_CATEGORIES
 
-    # Check for ambiguity: if top two scores are within 0.05,
-    # and either needs context, err on the side of injecting
+    # Ambiguity: if top two are within 0.05 and either needs context, inject
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     if len(sorted_scores) >= 2:
-        top_cat, top_score = sorted_scores[0]
+        _, top_score = sorted_scores[0]
         second_cat, second_score = sorted_scores[1]
         if top_score - second_score < 0.05 and second_cat in INJECT_CATEGORIES:
             inject = True
-            best_cat = second_cat  # prefer the inject category
+            best_cat = second_cat
 
     result = {
         "category": best_cat,
@@ -245,7 +289,7 @@ def serve() -> None:
         sys.exit(0)
 
     model = TextEmbedding(MODEL_NAME, threads=2)
-    cache = ProjectCache(model)
+    cache = EmbeddingCache(model)
 
     if os.path.exists(SOCKET_PATH):
         os.unlink(SOCKET_PATH)
@@ -293,7 +337,7 @@ def serve() -> None:
         except Exception as e:
             print(f"[classifier] Error: {e}", file=sys.stderr)
             try:
-                conn.sendall(json.dumps({"category": "no_context_global", "inject": False}).encode())
+                conn.sendall(json.dumps({"category": "no_context_generic", "inject": False}).encode())
             except Exception:
                 pass
         finally:
@@ -307,7 +351,7 @@ def main() -> None:
         prompt = sys.argv[1]
         project = sys.argv[2] if len(sys.argv) > 2 else "."
         model = TextEmbedding(MODEL_NAME, threads=2)
-        cache = ProjectCache(model)
+        cache = EmbeddingCache(model)
         result = classify(model, cache, prompt, project)
         print(json.dumps(result, indent=2))
     else:
