@@ -1,0 +1,29 @@
+{
+  "description": "Enhanced memory hooks — durable knowledge extraction, subagent support",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/stop.sh",
+            "async": true,
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/stop.sh",
+            "async": true,
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}
