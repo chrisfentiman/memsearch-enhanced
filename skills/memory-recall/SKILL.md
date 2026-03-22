@@ -34,8 +34,7 @@ Generate 3 search queries that capture different aspects of the question:
 
 For each query, run:
 ```bash
-memsearch search "<query>" --top-k 20 --json-output --collection <collection>
-```
+memsearch search "<query>" --top-k 20 --json-output```
 
 Merge all results. Deduplicate by `chunk_hash`, keeping the highest score.
 
@@ -68,8 +67,7 @@ Keep only results scored 4 or 5.
 
 For the top 3 results, run:
 ```bash
-memsearch expand <chunk_hash> --collection <collection>
-```
+memsearch expand <chunk_hash>```
 
 This gives the full markdown section with surrounding context.
 
