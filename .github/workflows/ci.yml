@@ -1,6 +1,8 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -26,4 +28,11 @@ jobs:
         run: test -f prompts/stop.txt
 
       - name: Validate plugin manifest
-        run: python3 -c "import json; d=json.load(open('.claude-plugin/plugin.json')); assert d['name']; assert d['version']; print(f'Plugin: {d[\"name\"]} v{d[\"version\"]}')"
+        run: |
+          python3 << 'PYEOF'
+          import json
+          d = json.load(open('.claude-plugin/plugin.json'))
+          assert d['name']
+          assert d['version']
+          print(f"Plugin: {d['name']} v{d['version']}")
+          PYEOF
