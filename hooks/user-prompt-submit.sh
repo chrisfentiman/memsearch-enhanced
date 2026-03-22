@@ -29,7 +29,7 @@ CATEGORY="no_context_generic"
 INJECT=false
 
 if [ -S "$CLASSIFIER_SOCKET" ]; then
-  REQUEST=$(python3 -c "import json,sys; print(json.dumps({'prompt': sys.argv[1], 'project': sys.argv[2]}))" "$PROMPT" "$CWD" 2>/dev/null || echo '{}')
+  REQUEST=$(python3 -c "import json,sys; print(json.dumps({'prompt': sys.argv[1], 'project': sys.argv[2]}))" "$PROMPT" "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null || echo '{}')
   RESULT=$(printf '%s' "$REQUEST" | nc -U "$CLASSIFIER_SOCKET" -w 2 2>/dev/null || echo '{}')
   CATEGORY=$(_json_val "$RESULT" "category" "no_context_generic")
   INJECT=$(_json_val "$RESULT" "inject" "false")
@@ -52,7 +52,7 @@ fi
 
 # needs_context_project also gets code context (if ctx is installed)
 if [ "$CATEGORY" = "needs_context_project" ] && command -v ctx &>/dev/null; then
-  CODE_RESULTS=$(ctx search "$PROMPT" -n 3 "$CWD" 2>/dev/null || true)
+  CODE_RESULTS=$(ctx search "$PROMPT" -n 3 "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null || true)
   if [ -n "$CODE_RESULTS" ]; then
     CONTEXT+="## Relevant code\n${CODE_RESULTS}\n\n"
   fi
