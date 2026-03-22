@@ -105,8 +105,13 @@ Extract durable knowledge from the transcript above. Output ONLY bullet points s
       --system-prompt "$SYSTEM_PROMPT" \
       2>/dev/null || true)
 
-    # Strip everything before the first category marker
-    SUMMARY=$(echo "$RAW_SUMMARY" | sed -n '/^- \(CORRECTION\|PREFERENCE\|DECISION\|BLOCKER\|FINDING\|CONTEXT\):/,$p')
+    # Find the first category marker line number and keep everything from there
+    FIRST_LINE=$(echo "$RAW_SUMMARY" | grep -n -E "^- (CORRECTION|PREFERENCE|DECISION|BLOCKER|FINDING|CONTEXT):" | head -1 | cut -d: -f1)
+    if [ -n "$FIRST_LINE" ]; then
+      SUMMARY=$(echo "$RAW_SUMMARY" | tail -n "+$FIRST_LINE")
+    else
+      SUMMARY=""
+    fi
 
     if [ -n "$SUMMARY" ]; then
       break
