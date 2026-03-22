@@ -176,6 +176,8 @@ if [ -f "$CLASSIFIER_SCRIPT" ] && command -v uv &>/dev/null; then
   fi
   if [ "$NEED_START" = true ]; then
     nohup uv run "$CLASSIFIER_SCRIPT" --daemon </dev/null &>/dev/null &
+    # Write version stamp so mid-session hooks can detect stale daemons
+    [ -n "$PLUGIN_VERSION" ] && echo "$PLUGIN_VERSION" > /tmp/memsearch-classify.version
   fi
 fi
 
