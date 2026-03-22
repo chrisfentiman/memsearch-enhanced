@@ -146,6 +146,17 @@ if [[ "$MILVUS_URI" != http* ]] && [[ "$MILVUS_URI" != tcp* ]]; then
   echo $! > "$INDEX_PIDFILE"
 fi
 
+# Start the shared semantic classifier daemon (if not already running).
+# One daemon serves all Claude Code sessions. Idle-timeouts after 30 min.
+CLASSIFIER_SCRIPT="$SCRIPT_DIR/../scripts/classifier.py"
+CLASSIFIER_SOCKET="/tmp/memsearch-classify.sock"
+if [ -f "$CLASSIFIER_SCRIPT" ] && command -v uv &>/dev/null; then
+  if [ ! -S "$CLASSIFIER_SOCKET" ]; then
+    # No daemon running, start one
+    nohup uv run "$CLASSIFIER_SCRIPT" --daemon </dev/null &>/dev/null &
+  fi
+fi
+
 # Always include status in systemMessage
 json_status=$(_json_encode_str "$status")
 
