@@ -15,6 +15,12 @@ if [ -z "$PROMPT" ] || [ ${#PROMPT} -lt 10 ]; then
   exit 0
 fi
 
+# Skip system/XML messages (task notifications, hook output, etc.)
+if [[ "$PROMPT" == "<"* ]] || [[ "$PROMPT" == "{"* ]]; then
+  echo '{"systemMessage": "[memsearch] Memory available"}'
+  exit 0
+fi
+
 # Need memsearch available
 if [ -z "$MEMSEARCH_CMD" ]; then
   echo '{"systemMessage": "[memsearch] Memory available"}'
