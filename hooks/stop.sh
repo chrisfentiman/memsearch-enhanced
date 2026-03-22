@@ -96,12 +96,22 @@ ${PARSED}
 
 Extract durable knowledge from the transcript above. Output ONLY bullet points starting with - and a category prefix. Nothing else."
 
-  SUMMARY=$(printf '%s' "$USER_MSG" | MEMSEARCH_NO_WATCH=1 CLAUDECODE= claude -p \
-    --model haiku \
-    --no-session-persistence \
-    --no-chrome \
-    --system-prompt "$SYSTEM_PROMPT" \
-    2>/dev/null || true)
+  # Retry up to 3 times, stripping preamble before first category marker
+  for _attempt in 1 2 3; do
+    RAW_SUMMARY=$(printf '%s' "$USER_MSG" | MEMSEARCH_NO_WATCH=1 CLAUDECODE= claude -p \
+      --model haiku \
+      --no-session-persistence \
+      --no-chrome \
+      --system-prompt "$SYSTEM_PROMPT" \
+      2>/dev/null || true)
+
+    # Strip everything before the first category marker
+    SUMMARY=$(echo "$RAW_SUMMARY" | sed -n '/^- \(CORRECTION\|PREFERENCE\|DECISION\|BLOCKER\|FINDING\|CONTEXT\):/,$p')
+
+    if [ -n "$SUMMARY" ]; then
+      break
+    fi
+  done
 fi
 
 if [ -z "$SUMMARY" ]; then
