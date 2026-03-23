@@ -1,0 +1,54 @@
+# needs_both exemplars
+# Prompts that need BOTH memsearch memories AND code search.
+# These are rare - most prompts clearly want one or the other.
+# Inject: memories + code search results.
+
+[needs_both]
+examples = [
+    # === PAST DECISION + SHOW ME THE CODE ===
+    "we discussed refactoring the auth module last week, can you find the current implementation and remind me what approach we agreed on",
+    "I remember we decided on a specific pattern for error handling, can you find where it's implemented and remind me why we chose it",
+    "there was a conversation about changing the database schema, show me the current migration and what we decided",
+    "we agreed to use a different caching strategy, find the current cache implementation and remind me what we planned to change",
+    "I corrected you about how we handle retries, find the retry logic and remind me what I said",
+    "what did we decide about the API response format, and show me the current serializer code",
+    "we had a discussion about the test structure, show me the test files and remind me what conventions we established",
+    "remind me why we chose this ORM pattern and show me the model definitions",
+
+    # === DEBUGGING WITH HISTORY ===
+    "this bug looks familiar, do we have any history of similar issues and can you look at the code in question",
+    "we fixed something like this before, find the relevant code and remind me what the fix was",
+    "there was a performance issue we discussed, show me the slow endpoint and what we learned about it",
+    "I think we already identified this as technical debt, find the code and check our notes about it",
+    "this error keeps coming back, check our memory for past incidents and look at the error handling code",
+    "we had a whole debugging session about race conditions in this area, show me the code and what we discovered",
+    "I remember someone raised a concern about this function, find it and check if we addressed it",
+    "we discussed adding monitoring here, show me the code and remind me what metrics we wanted to track",
+
+    # === ARCHITECTURE WITH CONTEXT ===
+    "we made some architectural decisions about how services communicate, show me the current integration points and remind me the reasoning",
+    "I want to understand how the system has evolved since our initial design discussion, show me the code and recall what the original plan was",
+    "we talked about technical debt in this area, show me the current state and what we planned to improve",
+    "remind me of the security concerns we raised and show me the authentication code so I can verify we addressed them",
+    "we discussed the deployment strategy for this service, show me the deployment config and remind me what constraints we identified",
+
+    # === ONBOARDING + CONTEXT ===
+    "I'm coming back to this after a while, show me the main entry point and remind me what we were working on last",
+    "show me the code we changed last time and remind me what the goal was",
+    "find the module we were refactoring and remind me what state we left it in",
+    "pull up the API we were designing and check our notes on the requirements",
+    "show me the tests we added last session and remind me what edge cases we still need to cover",
+
+    # === REVIEW + HISTORY ===
+    "review this function against the coding standards we established and show me the implementation",
+    "check if this new code follows the patterns we agreed on, pull up both the code and our conventions",
+    "compare the current implementation against what we originally planned and show me the differences",
+    "find where this convention is violated and remind me what the convention was",
+
+    # === LONG / PARAGRAPH STYLE ===
+    "so we spent a lot of time discussing the right approach for handling webhooks and I think we landed on a specific pattern, can you find the webhook handler code and also remind me what the key decisions were because I want to make sure we're still following them",
+    "I remember we had concerns about the scalability of this approach when we designed it, can you show me the current implementation and also recall what the specific concerns were so I can evaluate whether they've become real problems",
+    "we made a bunch of changes to the auth flow over the past few sessions and I'm not sure if they're all consistent, can you show me the current auth code and also pull up our decision history so I can verify nothing contradicts",
+    "there was a whole discussion about whether to use event sourcing for this domain and we decided against it for specific reasons, show me how we're currently handling state and remind me why we chose this approach",
+    "I think we identified some security issues in the file upload handler a while back, can you find that code and also check our memory for what the specific vulnerabilities were and whether we fixed them all",
+]

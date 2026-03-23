@@ -1,8 +1,8 @@
-# needs_context_project exemplars
+# needs_code exemplars
 # Prompts requiring project-specific code, architecture, or design context.
-# Inject: memsearch memories AND code search results.
+# Inject: code search results only.
 
-[needs_context_project]
+[needs_code]
 examples = [
     # === ARCHITECTURE / HOW THINGS WORK (short) ===
     "how does this work",

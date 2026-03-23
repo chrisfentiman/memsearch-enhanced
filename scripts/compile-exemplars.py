@@ -20,10 +20,10 @@ SCRIPT_DIR = Path(__file__).parent
 OUTPUT = SCRIPT_DIR / "exemplars.toml"
 
 CATEGORIES = [
-    "needs_context_project",
-    "needs_context_generic",
-    "no_context_project",
-    "no_context_generic",
+    "needs_memory",
+    "needs_code",
+    "needs_both",
+    "no_context",
 ]
 
 HEADER = """\

@@ -5,11 +5,11 @@
 """
 Self-improvement for the four-category semantic classifier.
 
-1. Analyzes session transcripts to infer ground truth from tool usage
-2. Validates candidates against the bootstrap classifier (quality gate)
-3. Merges with existing exemplars, scores all against bootstrap
-4. Keeps only top-N highest quality exemplars per category
-5. Splits into global vs project based on similarity to bootstrap
+1. Analyzes session transcripts
+2. Uses classifier prediction + weighted tool heuristic to finalize category
+3. Drops ambiguous cases where signals disagree
+4. Validates candidates against bootstrap quality gate
+5. Merges into global exemplars (no project-specific split)
 
 Usage:
   uv run improve.py <transcript.jsonl>
@@ -40,26 +40,37 @@ except ImportError:
     sys.exit(1)
 
 SCRIPT_DIR = Path(__file__).parent
-MAX_EXEMPLARS_PER_CATEGORY = 20
+MAX_EXEMPLARS_PER_CATEGORY = 30
 
 CATEGORIES = [
-    "needs_context_project",
-    "needs_context_generic",
-    "no_context_project",
-    "no_context_generic",
+    "needs_memory",
+    "needs_code",
+    "needs_both",
+    "no_context",
 ]
 
-# Built-in tools that indicate project-specific context was needed
-PROJECT_TOOLS = {"Read", "Edit", "Write", "Glob", "Grep"}
+# Tools that indicate code exploration was needed
+CODE_TOOLS = {"Read", "Glob", "Grep", "Agent"}
 
-# Built-in tools that indicate research/memory context was needed
-RESEARCH_TOOLS = {"Agent", "Skill"}
+# Tools that indicate memory/research context was needed
+MEMORY_TOOLS = {"Skill"}
 
-# Routine tools (no context needed when used alone)
-ROUTINE_TOOLS = {"Bash"}
+# Tools that indicate direct execution (no context needed)
+ROUTINE_TOOLS = {"Bash", "Edit", "Write"}
 
-# Any tool starting with mcp__ is an MCP tool (context was needed)
+# MCP tools that indicate memory was needed
+MEMORY_MCP = {"mcp__memsearch", "mcp__perplexity"}
+
+# Any tool starting with mcp__ is an MCP tool
 MCP_PREFIX = "mcp__"
+
+# Weight for tool heuristic vs classifier prediction
+# 0.0 = trust classifier only, 1.0 = trust tools only
+TOOL_WEIGHT = 0.4
+
+# Minimum agreement score to accept a candidate (0-1)
+# If classifier and tools disagree too much, drop the prompt
+AGREEMENT_THRESHOLD = 0.6
 
 
 # --- Prompt cleaning ---
@@ -157,32 +168,66 @@ def extract_turns(messages: list[dict]) -> list[dict]:
     return turns
 
 
-def infer_category(tools: set[str]) -> str | None:
-    """Infer the ground truth category from tool usage.
-
-    The key insight: using project tools (Read/Edit/Write/Glob/Grep) alone
-    does NOT mean context was needed. It just means the user gave a direct
-    instruction that involved files. Context is only "needed" when external
-    sources (MCP, Agent, Skill) were also used alongside project tools.
-    """
-    used_project = tools & PROJECT_TOOLS
-    used_research = tools & RESEARCH_TOOLS
-    used_routine = tools & ROUTINE_TOOLS
+def infer_category_from_tools(tools: set[str]) -> str:
+    """Infer category from tool usage as a heuristic signal."""
+    used_code = tools & CODE_TOOLS
+    used_memory = tools & MEMORY_TOOLS
     used_mcp = {t for t in tools if t.startswith(MCP_PREFIX)}
-    used_context = used_mcp or used_research
 
-    # Context tools + project tools = needed project-specific context
-    if used_context and used_project:
-        return "needs_context_project"
-    # Context tools alone = needed memory/research but not project files
-    if used_context:
-        return "needs_context_generic"
-    # Project tools alone = direct file work, no context needed
-    if used_project or used_routine:
-        return "no_context_project"
-    # No tools at all = no context, generic
-    if not tools:
-        return "no_context_generic"
+    used_memory_mcp = {t for t in used_mcp if any(t.startswith(m) for m in MEMORY_MCP)}
+    used_code_mcp = used_mcp - used_memory_mcp
+
+    has_memory = bool(used_memory or used_memory_mcp)
+    has_code = bool(used_code or used_code_mcp)
+
+    if has_memory and has_code:
+        return "needs_both"
+    if has_memory:
+        return "needs_memory"
+    if has_code:
+        return "needs_code"
+    return "no_context"
+
+
+def resolve_category(
+    classifier_cat: str | None,
+    tool_cat: str,
+) -> str | None:
+    """Resolve final category using classifier + weighted tool heuristic.
+
+    Returns None if the signals disagree too much (drop the prompt).
+    """
+    if classifier_cat is None:
+        # No classifier decision available, use tools alone
+        return tool_cat
+
+    if classifier_cat == tool_cat:
+        # Full agreement
+        return classifier_cat
+
+    # Partial agreement: check if they're "close enough"
+    # needs_memory and needs_code are far apart
+    # needs_both is compatible with either needs_memory or needs_code
+    # no_context is far from any needs_* category
+
+    compatible_pairs = {
+        ("needs_memory", "needs_both"),
+        ("needs_both", "needs_memory"),
+        ("needs_code", "needs_both"),
+        ("needs_both", "needs_code"),
+        ("needs_memory", "needs_code"),  # could be needs_both
+    }
+
+    if (classifier_cat, tool_cat) in compatible_pairs:
+        # Close enough - prefer the tool signal since it's ground truth
+        if tool_cat == "no_context":
+            return classifier_cat  # tools say nothing, trust classifier
+        return tool_cat
+
+    # Strong disagreement (e.g. classifier says needs_memory, tools say no_context)
+    # The tool signal is behavioral ground truth, but could be misleading
+    # (e.g. a memory question answered from the model's own knowledge without tools)
+    # Drop these ambiguous cases
     return None
 
 
@@ -224,24 +269,6 @@ def score_and_rank(
     return [ex for ex, _ in qualified[:max_n]]
 
 
-def split_global_project(
-    model: TextEmbedding,
-    exemplars: list[str],
-    bootstrap_embeds: np.ndarray,
-    threshold: float = 0.65,
-) -> tuple[list[str], list[str]]:
-    """Split into global (similar to bootstrap) vs project (dissimilar)."""
-    if not exemplars or bootstrap_embeds.shape[0] == 0:
-        return [], exemplars
-
-    embeds = np.array(list(model.embed(exemplars)))
-    scores = np.max(embeds @ bootstrap_embeds.T, axis=1)
-
-    global_ex = [ex for ex, s in zip(exemplars, scores) if s >= threshold]
-    project_ex = [ex for ex, s in zip(exemplars, scores) if s < threshold]
-    return global_ex, project_ex
-
-
 # --- Write exemplars ---
 
 
@@ -258,13 +285,6 @@ def write_exemplars(path: Path, cats: dict[str, list[str]]) -> None:
             for ex in sorted(examples):
                 f.write(f'    "{escape_toml(ex)}",\n')
             f.write("]\n\n")
-
-
-def merge_cat_dicts(a: dict[str, list[str]], b: dict[str, list[str]]) -> dict[str, list[str]]:
-    result = {}
-    for cat in CATEGORIES:
-        result[cat] = list(set(a.get(cat, []) + b.get(cat, [])))
-    return result
 
 
 # --- Main ---
@@ -302,39 +322,42 @@ def main() -> None:
 
     # Collect candidates per category
     candidates: dict[str, list[str]] = {cat: [] for cat in CATEGORIES}
+    dropped = 0
 
     for turn in turns:
         prompt = turn["prompt"]
         if prompt is None:
             continue
         tools = turn["tools"]
-        inferred = infer_category(tools)
-        if inferred is None:
+        tool_cat = infer_category_from_tools(tools)
+
+        # Get classifier's prediction if available
+        decision = decisions.get(prompt[:200])  # decisions store truncated prompts
+        classifier_cat = decision.get("category") if decision else None
+
+        # Resolve using both signals
+        final_cat = resolve_category(classifier_cat, tool_cat)
+
+        if final_cat is None:
+            dropped += 1
+            print(
+                f"  DROPPED: '{prompt[:60]}' classifier={classifier_cat} tools={tool_cat}",
+                file=sys.stderr,
+            )
             continue
 
-        decision = decisions.get(prompt)
-
-        if decision is None:
-            # Bootstrap: learn from tool usage
-            candidates[inferred].append(prompt)
-        else:
-            classified = decision.get("category", "no_context_generic")
-            if classified != inferred:
-                # Misclassification: use ground truth
-                candidates[inferred].append(prompt)
-                print(
-                    f"  MISCLASS: '{prompt[:60]}' classified={classified} actual={inferred}",
-                    file=sys.stderr,
-                )
+        candidates[final_cat].append(prompt)
 
     total_candidates = sum(len(v) for v in candidates.values())
     if total_candidates == 0:
-        print("No new candidates found.", file=sys.stderr)
+        print(f"No new candidates found ({dropped} dropped).", file=sys.stderr)
         return
 
     for cat in CATEGORIES:
         if candidates[cat]:
             print(f"  {cat}: {len(candidates[cat])} candidates", file=sys.stderr)
+    if dropped:
+        print(f"  dropped (ambiguous): {dropped}", file=sys.stderr)
 
     # Load model and bootstrap embeddings
     model = TextEmbedding("BAAI/bge-small-en-v1.5", threads=2)
@@ -343,48 +366,29 @@ def main() -> None:
         for cat, examples in bootstrap.items()
     }
 
-    # Load existing
-    project_path = project_dir / ".claude" / "context" / "exemplars.toml"
+    # Load existing global exemplars
     global_path = Path.home() / ".claude" / "context" / "exemplars.toml"
-    existing_project = load_existing_exemplars(project_path)
     existing_global = load_existing_exemplars(global_path)
 
-    # Re-score EVERYTHING: new candidates + existing exemplars from both files.
-    # Only the top N survive. Old weak exemplars get pruned, strong new ones replace them.
-    best_for_global: dict[str, list[str]] = {cat: [] for cat in CATEGORIES}
-    best_for_project: dict[str, list[str]] = {cat: [] for cat in CATEGORIES}
+    # Re-score: new candidates + existing exemplars all re-compete
+    best: dict[str, list[str]] = {cat: [] for cat in CATEGORIES}
 
     for cat in CATEGORIES:
         cat_bootstrap = bootstrap_embeds.get(cat, np.empty((0, 384)))
 
-        # Pool: new candidates + existing project + existing global (all re-compete)
         all_pool = list(set(
             candidates[cat]
-            + existing_project.get(cat, [])
             + existing_global.get(cat, [])
         ))
 
-        # Score all against bootstrap, keep only top N * 2 (we'll split after)
-        ranked = score_and_rank(model, all_pool, [], cat_bootstrap, MAX_EXEMPLARS_PER_CATEGORY * 2)
+        ranked = score_and_rank(model, all_pool, [], cat_bootstrap, MAX_EXEMPLARS_PER_CATEGORY)
+        best[cat] = ranked
 
-        # Split: similar to bootstrap = global, dissimilar = project
-        global_ex, project_ex = split_global_project(model, ranked, cat_bootstrap)
-
-        best_for_global[cat] = global_ex[:MAX_EXEMPLARS_PER_CATEGORY]
-        best_for_project[cat] = project_ex[:MAX_EXEMPLARS_PER_CATEGORY]
-
-    # Write PROJECT exemplars
-    has_project = any(best_for_project[cat] for cat in CATEGORIES)
-    if has_project:
-        write_exemplars(project_path, best_for_project)
-        counts = ", ".join(f"{cat}={len(best_for_project[cat])}" for cat in CATEGORIES if best_for_project[cat])
-        print(f"Project exemplars: {counts} -> {project_path}", file=sys.stderr)
-
-    # Write GLOBAL exemplars
-    has_global = any(best_for_global[cat] for cat in CATEGORIES)
-    if has_global:
-        write_exemplars(global_path, best_for_global)
-        counts = ", ".join(f"{cat}={len(best_for_global[cat])}" for cat in CATEGORIES if best_for_global[cat])
+    # Write global exemplars
+    has_exemplars = any(best[cat] for cat in CATEGORIES)
+    if has_exemplars:
+        write_exemplars(global_path, best)
+        counts = ", ".join(f"{cat}={len(best[cat])}" for cat in CATEGORIES if best[cat])
         print(f"Global exemplars: {counts} -> {global_path}", file=sys.stderr)
 
     print("Exemplars updated. Embeddings regenerate on next session.", file=sys.stderr)
