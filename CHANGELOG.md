@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.16](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.15...v0.1.16) (2026-03-23)
+
+
+### Features
+
+* rework classifier to memory/code/both/no_context categories ([#23](https://github.com/chrisfentiman/memsearch-enhanced/issues/23)) ([8fd3eaf](https://github.com/chrisfentiman/memsearch-enhanced/commit/8fd3eaf8017352bb3f89ad90151f8e0eefcf36a7))
+
 ## [0.1.15](https://github.com/chrisfentiman/memsearch-enhanced/compare/v0.1.14...v0.1.15) (2026-03-22)
 
 
