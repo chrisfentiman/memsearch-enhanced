@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # UserPromptSubmit hook: classify the prompt and optionally inject context.
 # Uses the semantic classifier daemon for fast yes/no decisions.
-# If ctx (claude-context-cli) is installed, includes code context too.
+#
+# Categories:
+#   needs_memory -> inject memsearch memories only
+#   needs_code   -> inject code search results only
+#   needs_both   -> inject memories + code search
+#   no_context   -> skip injection
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
@@ -49,17 +54,25 @@ if [ -S "$CLASSIFIER_SOCKET" ] && [ -f "$SCRIPT_DIR/../version.txt" ]; then
   fi
 fi
 
-CATEGORY="no_context_generic"
-INJECT=false
+CATEGORY="no_context"
+INJECT="false"
 
 if [ -S "$CLASSIFIER_SOCKET" ]; then
-  REQUEST=$(python3 -c "import json,sys; print(json.dumps({'prompt': sys.argv[1], 'project': sys.argv[2]}))" "$PROMPT" "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null || echo '{}')
-  RESULT=$(printf '%s' "$REQUEST" | nc -U "$CLASSIFIER_SOCKET" -w 2 2>/dev/null || echo '{}')
-  CATEGORY=$(_json_val "$RESULT" "category" "no_context_generic")
+  RESULT=$(python3 -c "
+import socket, json, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(5)
+s.connect(sys.argv[1])
+s.sendall(json.dumps({'prompt': sys.argv[2], 'project': sys.argv[3]}).encode())
+s.shutdown(socket.SHUT_WR)
+print(s.recv(16384).decode())
+s.close()
+" "$CLASSIFIER_SOCKET" "$PROMPT" "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null || echo '{}')
+  CATEGORY=$(_json_val "$RESULT" "category" "no_context")
   INJECT=$(_json_val "$RESULT" "inject" "false")
 fi
 
-if [ "$INJECT" != "true" ]; then
+if [ "$INJECT" = "false" ]; then
   echo '{"systemMessage": "[memsearch] Memory available"}'
   exit 0
 fi
@@ -68,28 +81,22 @@ fi
 
 CONTEXT=""
 
-# Both needs_context categories get memsearch memories
-MEMORY_RESULTS=$($MEMSEARCH_CMD search "$PROMPT" --top-k 3 ${COLLECTION_NAME:+--collection "$COLLECTION_NAME"} 2>/dev/null || true)
-if [ -n "$MEMORY_RESULTS" ] && [ "$MEMORY_RESULTS" != "No results found." ]; then
-  CONTEXT+="## Relevant memories\n${MEMORY_RESULTS}\n\n"
-fi
-
-# needs_context_project also gets code context (if ctx is installed)
-if [ "$CATEGORY" = "needs_context_project" ] && command -v ctx &>/dev/null; then
-  CODE_RESULTS=$(ctx search "$PROMPT" -n 3 "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null || true)
-  if [ -n "$CODE_RESULTS" ]; then
-    CONTEXT+="## Relevant code\n${CODE_RESULTS}\n\n"
+# Memory injection (needs_memory or needs_both)
+if [ "$INJECT" = "memory" ] || [ "$INJECT" = "both" ]; then
+  MEMORY_RESULTS=$($MEMSEARCH_CMD search "$PROMPT" --top-k 3 ${COLLECTION_NAME:+--collection "$COLLECTION_NAME"} 2>/dev/null || true)
+  if [ -n "$MEMORY_RESULTS" ] && [ "$MEMORY_RESULTS" != "No results found." ]; then
+    CONTEXT+="## Relevant memories\n${MEMORY_RESULTS}\n\n"
   fi
 fi
 
-# Add guidance on how to go deeper
-if [ -n "$CONTEXT" ]; then
-  CONTEXT+="## How to go deeper\n"
-  CONTEXT+="- For more memories: use /memory-recall with specific queries\n"
-  if [ "$CATEGORY" = "needs_context_project" ]; then
-    CONTEXT+="- For code details: use search_code to find implementations\n"
+# Code injection (needs_code or needs_both)
+if [ "$INJECT" = "code" ] || [ "$INJECT" = "both" ]; then
+  if command -v ctx &>/dev/null; then
+    CODE_RESULTS=$(ctx search "$PROMPT" -n 3 "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null || true)
+    if [ -n "$CODE_RESULTS" ]; then
+      CONTEXT+="## Relevant code\n${CODE_RESULTS}\n\n"
+    fi
   fi
-  CONTEXT+="- For exact past conversations: use memsearch expand <hash>\n"
 fi
 
 if [ -n "$CONTEXT" ]; then

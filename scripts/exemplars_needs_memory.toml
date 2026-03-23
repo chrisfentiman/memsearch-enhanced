@@ -1,9 +1,9 @@
-# needs_context_generic exemplars
+# needs_memory exemplars
 # Prompts needing session history, memory, or accumulated knowledge.
 # NOT project-specific code, but past decisions, preferences, corrections, continuity.
-# Inject: memsearch memories only (no code search).
+# Inject: memsearch memories only.
 
-[needs_context_generic]
+[needs_memory]
 examples = [
     # === SESSION CONTINUITY (short) ===
     "where were we",

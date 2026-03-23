@@ -165,7 +165,17 @@ if [ -f "$CLASSIFIER_SCRIPT" ] && command -v uv &>/dev/null; then
     # If the daemon is too old to handle version requests, it will return
     # a classify result or error instead of a version string. Treat any
     # response that doesn't match the expected version as "needs restart".
-    DAEMON_VERSION=$(echo '{"type":"version"}' | nc -U "$CLASSIFIER_SOCKET" -w 2 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo "")
+    DAEMON_VERSION=$(python3 -c "
+import socket, json, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(2)
+s.connect(sys.argv[1])
+s.sendall(json.dumps({'type': 'version'}).encode())
+s.shutdown(socket.SHUT_WR)
+d = json.loads(s.recv(4096).decode())
+print(d.get('version', ''))
+s.close()
+" "$CLASSIFIER_SOCKET" 2>/dev/null || echo "")
     if [ "$DAEMON_VERSION" != "$PLUGIN_VERSION" ]; then
       # Version mismatch or unrecognized response - kill old daemon
       pkill -f "classifier.py --daemon" 2>/dev/null || true

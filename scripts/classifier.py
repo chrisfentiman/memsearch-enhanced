@@ -6,17 +6,17 @@
 Shared semantic classifier daemon for memsearch-enhanced.
 
 Four-category routing:
-  - needs_context_project: inject code context + memories
-  - needs_context_generic: inject memories only
-  - no_context_project: skip (routine project work)
-  - no_context_generic: skip (general question)
+  - needs_memory: inject memsearch memories (decisions, corrections, preferences)
+  - needs_code: inject code search results (architecture, debugging, finding code)
+  - needs_both: inject memories AND code search
+  - no_context: skip injection entirely
 
 One daemon serves ALL Claude Code sessions. First session starts it,
 others reuse. Idle timeout auto-exits after no requests.
 
 Protocol (Unix socket, JSON):
   Request:  {"prompt": "...", "project": "/path/to/repo"}
-  Response: {"category": "needs_context_project", "scores": {...}, "inject": true}
+  Response: {"category": "needs_memory", "scores": {...}, "inject": "memory"}
 """
 
 from __future__ import annotations
@@ -54,14 +54,19 @@ PLUGIN_VERSION = (SCRIPT_DIR.parent / "version.txt").read_text().strip() if (SCR
 THRESHOLD = 0.40
 
 CATEGORIES = [
-    "needs_context_project",
-    "needs_context_generic",
-    "no_context_project",
-    "no_context_generic",
+    "needs_memory",
+    "needs_code",
+    "needs_both",
+    "no_context",
 ]
 
-# Categories that trigger context injection
-INJECT_CATEGORIES = {"needs_context_project", "needs_context_generic"}
+# What each category injects
+INJECT_MAP = {
+    "needs_memory": "memory",
+    "needs_code": "code",
+    "needs_both": "both",
+    "no_context": False,
+}
 
 
 # --- Exemplar loading ---
@@ -99,12 +104,12 @@ def load_exemplars_for_project(project: str) -> dict[str, list[str]]:
         if result:
             return result
 
-    # Minimal fallback (two categories)
+    # Minimal fallback
     return {
-        "needs_context_project": ["fix the bug in the auth module", "how does the caching work"],
-        "needs_context_generic": ["continue where we left off", "what did we decide"],
-        "no_context_project": ["update the readme", "run the tests"],
-        "no_context_generic": ["hello", "what is REST"],
+        "needs_memory": ["why did we decide that", "what corrections did you get from me"],
+        "needs_code": ["how does the auth middleware work", "where is the config validation"],
+        "needs_both": ["we discussed refactoring that module, show me the code", "what did we decide about the database schema, find the migration"],
+        "no_context": ["thanks", "yes do it", "run the tests", "fix the typo"],
     }
 
 
@@ -199,7 +204,7 @@ def classify(
     """
     if len(prompt.strip()) < 10:
         return {
-            "category": "no_context_generic",
+            "category": "no_context",
             "inject": False,
             "scores": {},
             "reason": "too_short",
@@ -237,18 +242,19 @@ def classify(
     best_score = scores[best_cat]
 
     if best_score < THRESHOLD:
-        best_cat = "no_context_generic"
+        best_cat = "no_context"
 
-    inject = best_cat in INJECT_CATEGORIES
+    inject = INJECT_MAP.get(best_cat, False)
 
-    # Ambiguity: if top two are within 0.05 and either needs context, inject
+    # Ambiguity: if top two are within 0.05 and one needs context, prefer injection
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     if len(sorted_scores) >= 2:
         _, top_score = sorted_scores[0]
         second_cat, second_score = sorted_scores[1]
-        if top_score - second_score < 0.05 and second_cat in INJECT_CATEGORIES:
-            inject = True
-            best_cat = second_cat
+        if top_score - second_score < 0.05 and INJECT_MAP.get(second_cat, False):
+            if not inject:
+                inject = INJECT_MAP[second_cat]
+                best_cat = second_cat
 
     result = {
         "category": best_cat,
@@ -322,12 +328,24 @@ def serve() -> None:
             break
 
         try:
+            conn.settimeout(5.0)
             data = b""
             while True:
-                chunk = conn.recv(8192)
-                if not chunk:
+                try:
+                    chunk = conn.recv(8192)
+                    if not chunk:
+                        break
+                    data += chunk
+                    # Check if we have complete JSON (ends with })
+                    stripped = data.strip()
+                    if stripped.endswith(b"}"):
+                        try:
+                            json.loads(stripped)
+                            break  # Valid JSON received
+                        except json.JSONDecodeError:
+                            continue  # Incomplete, keep reading
+                except socket.timeout:
                     break
-                data += chunk
 
             request = json.loads(data.decode("utf-8", errors="replace"))
             req_type = request.get("type", "classify")
@@ -342,7 +360,7 @@ def serve() -> None:
         except Exception as e:
             print(f"[classifier] Error: {e}", file=sys.stderr)
             try:
-                conn.sendall(json.dumps({"category": "no_context_generic", "inject": False}).encode())
+                conn.sendall(json.dumps({"category": "no_context", "inject": False}).encode())
             except Exception:
                 pass
         finally:
